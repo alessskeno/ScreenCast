@@ -1,0 +1,25 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Gömülecek ffmpeg (büyük ikili; her makinede yerel olarak konur)
+host/assets/ffmpeg.exe
+
+# Tizen paketleri ve imza artıkları
+*.wgt
+.tizen/
+.sign/
+tv-app/.manifest.tmp
+tv-app/author-signature.xml
+tv-app/signature*.xml
+
+# Claude çalışma dosyaları
+.claude/
+
+# Günlükler / geçici
+*.log
+out.log
+err.log
+
+# Yerel gizli notlar (sertifika şifresi vb.)
+local-notes.md

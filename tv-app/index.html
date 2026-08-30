@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<!-- TV için sabit 1080p viewport: yoksa uygulama sol üstte küçük pencere olarak çizilir -->
+<meta name="viewport" content="width=1920, height=1080, user-scalable=no">
+<title>PC Mirror</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<!-- PC'den gelen H.264 akışı; çözmeyi TV'nin donanım dekoderi yapar -->
+<video id="screen" autoplay muted playsinline></video>
+<!-- WebCodecs kipinde görüntü buraya çizilir (video elementi ses için kalır) -->
+<canvas id="cast" class="hidden"></canvas>
+
+<!-- İmleç ayrı kanaldan gelir ve burada çizilir (video gecikmesinden bağımsız) -->
+<svg id="cursor" width="26" height="26" viewBox="0 0 24 24" aria-hidden="true">
+  <path d="M5 2 L5 19 L9.5 15 L12.5 21.5 L15 20.5 L12 14 L18 14 Z"
+        fill="#ffffff" stroke="#000000" stroke-width="1.4"/>
+</svg>
+
+<div id="status">Başlatılıyor…</div>
+<div id="stats" class="hidden"></div>
+
+<div id="setup" class="hidden">
+  <h1>PC Mirror</h1>
+  <p>Bilgisayarınızın adresini girin (örn. 192.168.1.20:47000)</p>
+  <input id="host-input" type="text" spellcheck="false">
+  <div class="btn-row">
+    <button id="connect-btn">Bağlan</button>
+    <button id="scan-btn">Ağı Tara</button>
+    <button id="exit-btn">Çıkış</button>
+  </div>
+  <p class="hint" id="setup-hint">Kumandada GERİ tuşu bu menüyü açar/kapatır. "Ağı Tara" bilgisayarı kendisi bulur.</p>
+</div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

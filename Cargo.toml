@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["host"]
+
+# Performans: yayın (release) derlemesinde tam optimizasyon.
+# LTO + tek codegen birimi: kapsamlı satır-içi (inline) optimizasyonu sağlar,
+# video boru hattındaki sıcak döngüler için önemli.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# Geliştirme derlemesinde bile bağımlılıklar optimize edilsin
+# (webrtc/şifreleme kütüphaneleri optimizasyonsuz çok yavaş kalır).
+[profile.dev.package."*"]
+opt-level = 2

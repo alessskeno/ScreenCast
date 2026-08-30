@@ -1,0 +1,131 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: system-ui, sans-serif;
+}
+
+#screen {
+  /* NOT: "inset: 0" KULLANMA — eski Tizen Chromium tanımıyor (panel sol üste
+     büzüşüyor). Kenarları tek tek yaz. */
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain; /* en-boy oranını koru, gerekirse siyah bant */
+}
+
+#cast {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+#cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  pointer-events: none;
+  will-change: transform;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
+#status {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: #8899aa;
+  font-size: 2vw;
+  text-align: center;
+}
+
+#stats {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  color: #00ff88;
+  background: rgba(0, 0, 0, 0.55);
+  font: 15px/1.4 monospace;
+  padding: 6px 12px;
+  border-radius: 4px;
+}
+
+#setup {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background: #101418;
+  color: #eee;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* "gap" da eski motorda yok — aralıklar margin ile */
+#setup > * {
+  margin: 7px 0;
+}
+
+#setup input {
+  font-size: 24px;
+  padding: 10px 14px;
+  width: 380px;
+  border-radius: 6px;
+  border: 1px solid #345;
+  background: #1a2028;
+  color: #fff;
+}
+
+#setup .btn-row {
+  display: flex;
+}
+
+#setup .btn-row button {
+  margin: 0 7px;
+}
+
+#setup button {
+  font-size: 24px;
+  padding: 10px 28px;
+  border-radius: 6px;
+  border: 0;
+  background: #2266dd;
+  color: #fff;
+}
+
+#setup #scan-btn {
+  background: #2a8f4e;
+}
+
+#setup #exit-btn {
+  background: #8f2a2a;
+}
+
+#setup .hint {
+  color: #789;
+  font-size: 16px;
+}
+
+/* TV'de odak görünür olmalı: kumanda hangi alandaysa parlak çerçeve */
+#setup input:focus,
+#setup button:focus {
+  outline: 4px solid #66aaff;
+  outline-offset: 2px;
+}
+
+.hidden {
+  display: none !important;
+}
