@@ -12,6 +12,15 @@ Bu dosya her oturumda otomatik yüklenir. Amaç: aynı şeyleri yeniden araştı
 5. Kullanıcının çalışma prensibi: **önce tüm bileşenleri uçtan uca test et,
    optimizasyona ancak somut bir sorun görülünce gir.** Erken optimizasyon önerme.
 
+## GitHub
+
+Depo: **github.com/alessskeno/ScreenCast** (herkese açık; remote origin, SSH).
+Commit kuralı: mesaj sonuna `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+GİZLİLİK: sertifika şifresi `local-notes.md`'de (gitignore'da) — CLAUDE.md'ye şifre
+YAZMA. Tizen imza artıkları (.manifest.tmp, *signature*.xml) ve .claude/ gitignore'da.
+Release: etiket v0.3.5 push'landı; exe release'i gh CLI ile eklenir
+(`gh release create vX -F notlar.md mirror-host.exe#"PC Mirror vX (Windows x64)"`).
+
 ## Proje Nedir?
 
 Windows laptop ekranını **kablosuz** olarak Samsung (Tizen) TV'ye/tarayıcıya taşıyan
