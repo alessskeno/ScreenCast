@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 // (etiket, --mode değeri, piksel sayısı — bitrate şablonu seçiminde kullanılır)
 const MODES: &[(&str, Option<&str>, u64)] = &[
@@ -55,13 +56,14 @@ struct MonitorEntry {
     pixels: u64,
 }
 
+#[cfg(windows)]
 fn list_monitors() -> Vec<MonitorEntry> {
     crate::vdd::all_outputs()
         .into_iter()
         .filter(|o| o.adapter_index == 0)
         .map(|o| {
-            let w = o.rect.right - o.rect.left;
-            let h = o.rect.bottom - o.rect.top;
+            let w = o.rect.width();
+            let h = o.rect.height();
             let primary = o.rect.left == 0 && o.rect.top == 0;
             MonitorEntry {
                 label: format!(
@@ -76,6 +78,42 @@ fn list_monitors() -> Vec<MonitorEntry> {
             }
         })
         .collect()
+}
+
+/// Linux: monitörler Mutter'dan gelir; dizin sırası `--output` ile birebir aynıdır.
+#[cfg(target_os = "linux")]
+fn list_monitors() -> Vec<MonitorEntry> {
+    crate::screencast::list_monitors_blocking()
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let (w, h) = (m.width(), m.height());
+            MonitorEntry {
+                label: format!(
+                    "{} — {}x{}{}",
+                    m.connector,
+                    w,
+                    h,
+                    if m.primary { " (birincil)" } else { "" }
+                ),
+                output_index: i as u32,
+                pixels: (w.max(1) as u64) * (h.max(1) as u64),
+            }
+        })
+        .collect()
+}
+
+/// Sanal ekran için sürücü hazır mı?
+/// Windows: parsec-vdd kurulu mu. Linux: sürücü GEREKMEZ (Mutter sağlıyor).
+#[cfg(windows)]
+fn vdd_available() -> bool {
+    crate::vdd::is_installed()
+}
+
+#[cfg(not(windows))]
+fn vdd_available() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -107,12 +145,22 @@ impl Default for GuiConfig {
     }
 }
 
+#[cfg(windows)]
 fn config_path() -> Option<std::path::PathBuf> {
     Some(
         std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?)
             .join("mirror-host")
             .join("gui.json"),
     )
+}
+
+/// Linux'ta XDG kuralı: $XDG_CONFIG_HOME (yoksa ~/.config) altında.
+#[cfg(target_os = "linux")]
+fn config_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+    Some(base.join("mirror-host").join("gui.json"))
 }
 
 struct App {
@@ -123,10 +171,20 @@ struct App {
     logs: Arc<Mutex<VecDeque<String>>>,
     local_ip: String,
     monitors: Vec<MonitorEntry>,
-    /// VB-CABLE kurulu mu (tv-audio için gerekli)?
+    /// Sanal ses çıkışı hazır mı (tv-audio için gerekli)?
+    /// Windows: VB-CABLE kurulu mu; Linux: pactl var mı.
     sink_ok: bool,
+    #[cfg_attr(not(windows), allow(dead_code))]
     cable_installing: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     cable_was_installing: bool,
+    /// Sanal ekran sürücüsü (parsec-vdd) kurulu mu? Linux'ta gerekmez.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    vdd_ok: bool,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    vdd_installing: Arc<std::sync::atomic::AtomicBool>,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    vdd_was_installing: bool,
 }
 
 impl App {
@@ -146,12 +204,17 @@ impl App {
             sink_ok: crate::audio_route::virtual_sink_available(),
             cable_installing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             cable_was_installing: false,
+            vdd_ok: vdd_available(),
+            vdd_installing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            vdd_was_installing: false,
         }
     }
 
     /// VB-CABLE'ı resmî siteden indirip kurulumcusunu (UAC ile) çalıştırır.
     /// Kurulumcu exe'ye GÖMÜLMEZ — VB-Audio lisansı yeniden dağıtıma izin vermez;
     /// indirme kullanıcının makinesinde vendor'dan yapılır.
+    /// Linux'ta gerekmez: sanal çıkışı PipeWire çalışma anında oluşturur.
+    #[cfg(windows)]
     fn install_cable(&mut self) {
         use std::sync::atomic::Ordering;
         if self.cable_installing.swap(true, Ordering::SeqCst) {
@@ -191,6 +254,96 @@ exit 0"#;
             flag.store(false, Ordering::SeqCst);
         });
     }
+
+    /// Sanal ses çıkışı yoksa gösterilen uyarı — Windows'ta sürücü kurulumu
+    /// teklif edilir, Linux'ta yalnız ses sunucusunun çalışması beklenir.
+    #[cfg(windows)]
+    fn sink_warning(&mut self, ui: &mut egui::Ui) {
+        let installing = self.cable_installing.load(std::sync::atomic::Ordering::SeqCst);
+        ui.horizontal(|ui| {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "⚠ Sanal ses aygıtı (VB-CABLE) kurulu değil",
+            );
+            if installing {
+                ui.spinner();
+            } else if ui.button("İndir ve kur").clicked() {
+                self.install_cable();
+            }
+        });
+    }
+
+    #[cfg(not(windows))]
+    fn sink_warning(&mut self, ui: &mut egui::Ui) {
+        ui.colored_label(
+            egui::Color32::YELLOW,
+            "⚠ pactl bulunamadı — PipeWire/PulseAudio çalışmıyor (sanal çıkış oluşturulamaz)",
+        );
+    }
+
+    /// parsec-vdd sürücüsünü resmî Parsec sunucusundan indirip kurar (UAC ile).
+    ///
+    /// NEDEN GÖMÜLMÜYOR (ffmpeg gömülüyken): parsec-vdd bir ÇEKİRDEK MODU ekran
+    /// sürücüsüdür. ffmpeg gibi bir klasöre açılıp çalıştırılamaz — sürücü
+    /// deposuna kurulmalı (INF + imza kataloğu), bu da yönetici hakkı ister.
+    /// Ayrıca sürücü Parsec'e ait; ikili dosyayı yeniden dağıtmak lisans olarak
+    /// güvenli değil (VB-CABLE'da da aynı gerekçeyle indirme yolu seçilmişti).
+    #[cfg(windows)]
+    fn install_vdd(&mut self) {
+        use std::sync::atomic::Ordering;
+        if self.vdd_installing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        Self::push_log(&self.logs, "[panel] Sanal ekran sürücüsü indiriliyor (parsec.app)…".into());
+        let flag = self.vdd_installing.clone();
+        let logs = self.logs.clone();
+        std::thread::spawn(move || {
+            let script = r#"$ProgressPreference='SilentlyContinue';
+$dir = Join-Path $env:TEMP 'parsec-vdd-dl'; New-Item -ItemType Directory -Force $dir | Out-Null;
+$exe = Join-Path $dir 'parsec-vdd.exe';
+try { Invoke-WebRequest -Uri 'https://builds.parsec.app/vdd/parsec-vdd-0.45.0.0.exe' -OutFile $exe -UseBasicParsing } catch { exit 1 }
+Start-Process -FilePath $exe -ArgumentList '/S' -Verb RunAs -Wait;
+exit 0"#;
+            let status = Command::new("powershell")
+                .args(["-NoProfile", "-Command", script])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match status {
+                Ok(s) if s.success() => Self::push_log(
+                    &logs,
+                    "[panel] Sanal ekran sürücüsü kuruldu (gerekirse yayını yeniden başlatın)".into(),
+                ),
+                _ => Self::push_log(
+                    &logs,
+                    "[panel] Sürücü kurulamadı — elle: builds.parsec.app/vdd/parsec-vdd-0.45.0.0.exe".into(),
+                ),
+            }
+            flag.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// Sanal ekran sürücüsü yoksa gösterilen uyarı (yalnız Windows'ta anlamlı).
+    #[cfg(windows)]
+    fn vdd_warning(&mut self, ui: &mut egui::Ui) {
+        let installing = self.vdd_installing.load(std::sync::atomic::Ordering::SeqCst);
+        ui.horizontal(|ui| {
+            ui.colored_label(
+                egui::Color32::YELLOW,
+                "⚠ Sanal ekran sürücüsü (parsec-vdd) kurulu değil",
+            );
+            if installing {
+                ui.spinner();
+            } else if ui.button("İndir ve kur").clicked() {
+                self.install_vdd();
+            }
+        });
+        ui.weak("Kurulum yönetici izni ister. Olmadan \"genişlet\" çalışmaz, aynalama çalışır.");
+    }
+
+    #[cfg(not(windows))]
+    fn vdd_warning(&mut self, _ui: &mut egui::Ui) {}
 
     /// Şablon seçimi için kaynak çözünürlük: genişletmede seçili sanal mod,
     /// aynalamada seçili gerçek monitörün pikselleri.
@@ -262,17 +415,20 @@ exit 0"#;
 
         // Çalışma dizini exe'nin yanı: tv-app klasörü varsa diskten servis edilir.
         let workdir = exe.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-        let spawned = {
+        let mut command = Command::new(&exe);
+        command
+            .args(&args)
+            .current_dir(workdir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // Windows'ta alt sürecin konsol penceresi açılmasın.
+        #[cfg(windows)]
+        {
             use std::os::windows::process::CommandExt;
-            Command::new(&exe)
-                .args(&args)
-                .current_dir(workdir)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .creation_flags(CREATE_NO_WINDOW)
-                .spawn()
-        };
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let spawned = command.spawn();
         match spawned {
             Ok(mut child) => {
                 self.child_stdin = child.stdin.take();
@@ -348,6 +504,12 @@ impl eframe::App for App {
             self.sink_ok = crate::audio_route::virtual_sink_available();
         }
         self.cable_was_installing = installing;
+        // Sürücü kurulumu bitince "kurulu mu" durumunu tazele.
+        let vdd_installing = self.vdd_installing.load(std::sync::atomic::Ordering::SeqCst);
+        if self.vdd_was_installing && !vdd_installing {
+            self.vdd_ok = vdd_available();
+        }
+        self.vdd_was_installing = vdd_installing;
         let running = self.child.is_some();
         let stopping = self.stopping_since.is_some();
 
@@ -372,6 +534,9 @@ impl eframe::App for App {
                 ui.group(|ui| {
                     ui.label(egui::RichText::new("Ekran").strong());
                     ui.checkbox(&mut self.cfg.extend, "TV'yi ikinci ekran yap (genişlet)");
+                    if self.cfg.extend && !self.vdd_ok {
+                        self.vdd_warning(ui);
+                    }
                     if self.cfg.extend {
                         egui::ComboBox::from_label("Sanal ekran çözünürlüğü")
                             .selected_text(MODES[self.cfg.mode_index.min(MODES.len() - 1)].0)
@@ -454,21 +619,10 @@ impl eframe::App for App {
                         ),
                     );
                     if self.cfg.audio && self.cfg.tv_audio && !self.sink_ok {
-                        let installing = self
-                            .cable_installing
-                            .load(std::sync::atomic::Ordering::SeqCst);
-                        ui.horizontal(|ui| {
-                            ui.colored_label(
-                                egui::Color32::YELLOW,
-                                "⚠ Sanal ses aygıtı (VB-CABLE) kurulu değil",
-                            );
-                            if installing {
-                                ui.spinner();
-                            } else if ui.button("İndir ve kur").clicked() {
-                                self.install_cable();
-                            }
-                        });
+                        self.sink_warning(ui);
                     }
+                    // Windows'ta yerleşik olmayan davranış; Linux masaüstlerinde zaten var.
+                    #[cfg(windows)]
                     ui.checkbox(
                         &mut self.cfg.cursor_follow,
                         "Alt+Tab'da imleç pencereye ışınlansın",
@@ -548,6 +702,7 @@ fn local_ip() -> String {
 
 pub fn run() -> anyhow::Result<()> {
     // Çift tıklamayla açıldıysa arkadaki konsol penceresinden kurtul.
+    #[cfg(windows)]
     unsafe {
         let _ = windows::Win32::System::Console::FreeConsole();
     }

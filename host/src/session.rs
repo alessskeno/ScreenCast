@@ -14,7 +14,9 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 use webrtc::api::interceptor_registry::register_default_interceptors;
 use webrtc::api::media_engine::{MediaEngine, MIME_TYPE_H264, MIME_TYPE_OPUS};
+use webrtc::api::setting_engine::SettingEngine;
 use webrtc::api::APIBuilder;
+use webrtc::ice::udp_network::{EphemeralUDP, UDPNetwork};
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 use webrtc::interceptor::registry::Registry;
 use webrtc::media::Sample;
@@ -39,6 +41,11 @@ pub async fn run(socket: WebSocket, state: AppState, peer: std::net::SocketAddr)
 
 /// İzleyici bu makinenin kendisi mi? (Aynı PC'de tarayıcıyla izleme durumu.)
 /// Kendi IP'mize giden yolun kaynak IP'si yine kendisiyse bağlantı yereldir.
+/// ICE'nin kullanacağı UDP port aralığı (dahil). Güvenlik duvarında yalnız
+/// bunlar + HTTP portu açılır. Aynı anda birkaç izleyici için fazlasıyla yeterli.
+pub const ICE_PORT_MIN: u16 = 47100;
+pub const ICE_PORT_MAX: u16 = 47120;
+
 fn is_same_machine(peer: &std::net::SocketAddr) -> bool {
     if peer.ip().is_loopback() {
         return true;
@@ -99,9 +106,24 @@ async fn drive(mut ws: WebSocket, state: AppState, peer: std::net::SocketAddr) -
     )?;
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut media)?;
+
+    // ICE için DAR ve SABİT bir UDP port aralığı kullan.
+    //
+    // Varsayılanda webrtc her oturumda çekirdeğin geçici port havuzundan
+    // (Linux'ta 32768-60999) rastgele portlar seçer. Güvenlik duvarı olan bir
+    // makinede bu, "video hiç gelmiyor" demektir: HTTP portu (47000) açılsa
+    // bile sayfa yüklenir ama medya bağlanamaz — ya da 28 bin portu birden
+    // açmak gerekir. Sabit aralıkla kullanıcı yalnız birkaç portu açar.
+    let mut settings = SettingEngine::default();
+    settings.set_udp_network(UDPNetwork::Ephemeral(EphemeralUDP::new(
+        ICE_PORT_MIN,
+        ICE_PORT_MAX,
+    )?));
+
     let api = APIBuilder::new()
         .with_media_engine(media)
         .with_interceptor_registry(registry)
+        .with_setting_engine(settings)
         .build();
 
     // LAN içi bağlantı: STUN/TURN gerekmez, yerel adaylar yeter.
@@ -346,6 +368,24 @@ async fn drive(mut ws: WebSocket, state: AppState, peer: std::net::SocketAddr) -
                             ));
                         }
                     }
+                    // Teşhis: istemcinin ICE adaylarını say. Chrome/Edge varsayılanda
+                    // yerel IP'leri gizler ve "<uuid>.local" (mDNS) adayları yollar;
+                    // bunları çözebilmek için UDP 5353'ün güvenlik duvarında AÇIK
+                    // olması şart. Çözülemezse adaylar düşer, uzak aday sayısı sıfıra
+                    // iner ve ICE "pingAllCandidates ... no candidate pairs" ile takılır
+                    // (yaşandı: ufw açıkken Windows/Chrome'dan bağlanan izleyici).
+                    let cands: Vec<&str> =
+                        sdp.lines().filter(|l| l.starts_with("a=candidate:")).collect();
+                    let mdns = cands.iter().filter(|c| c.contains(".local")).count();
+                    info!("İstemci ICE adayları: {} (mDNS/.local: {mdns})", cands.len());
+                    if mdns > 0 && mdns == cands.len() {
+                        warn!(
+                            "Adayların tamamı mDNS — çözülemezse bağlantı kurulamaz. \
+                             Güvenlik duvarında UDP 5353 açık olmalı \
+                             (ufw: sudo ufw allow from <ağ>/24 to any port 5353 proto udp)"
+                        );
+                    }
+
                     let offer = RTCSessionDescription::offer(sdp)?;
                     pc.set_remote_description(offer).await?;
                     let answer = pc.create_answer(None).await?;
@@ -378,7 +418,7 @@ async fn drive(mut ws: WebSocket, state: AppState, peer: std::net::SocketAddr) -
 /// başlanır; kanal taşarsa (Lagged) çözücü bozulmasın diye yine anahtar kare beklenir.
 fn spawn_video_pump(
     track: Arc<TrackLocalStaticSample>,
-    tx: broadcast::Sender<Arc<crate::encoder::EncodedFrame>>,
+    tx: broadcast::Sender<Arc<crate::engine::EncodedFrame>>,
     keyframe: Arc<std::sync::atomic::AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     let mut rx = tx.subscribe();

@@ -35,28 +35,10 @@ pub struct FrameTex {
 // COM işaretçisi iş parçacıkları arasında taşınır; cihaz çok iş parçacıklı korumada.
 unsafe impl Send for FrameTex {}
 
-#[derive(Clone)]
-pub struct PipelineConfig {
-    pub fps: u32,
-    pub bitrate_bps: u32,
-    pub gop_frames: u32,
-    pub output_index: u32,
-    /// Çıkışın bağlı olduğu DXGI adaptörü (0 = ana GPU; sanal monitör
-    /// kendi adaptöründe olabilir — yalnız ffmpeg motoru destekler).
-    pub adapter_index: u32,
-    /// Yakalanan ekranın boyutu (biliniyorsa; log ve imleç yedeği için).
-    pub capture_size: Option<(u32, u32)>,
-}
-
-pub struct PipelineHandles {
-    pub encoded_tx: broadcast::Sender<Arc<EncodedFrame>>,
-    /// 1080p "hafif" akış (kaynak 1080p'den büyükse; TV gibi zayıf çözücüler için).
-    pub lite_tx: Option<broadcast::Sender<Arc<EncodedFrame>>>,
-    pub keyframe_request: Arc<AtomicBool>,
-    pub stop: Arc<AtomicBool>,
-    pub width: u32,
-    pub height: u32,
-}
+// Yapılandırma ve tutamaklar platformdan bağımsız `engine` modülünde yaşar
+// (Linux/GStreamer motoru da aynılarını kullanır); buradan yeniden dışa verilir
+// ki mevcut `crate::pipeline::PipelineConfig` kullanımları değişmesin.
+pub use crate::engine::{PipelineConfig, PipelineHandles};
 
 struct Slot {
     frame: Mutex<Option<FrameTex>>,

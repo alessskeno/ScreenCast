@@ -1,8 +1,8 @@
 [package]
 name = "mirror-host"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
-description = "Kablosuz ikinci ekran — Windows yayın ucu (DXGI yakalama → donanım H.264 → WebRTC)"
+description = "Kablosuz ikinci ekran — yayın ucu (Windows: DXGI/ffmpeg, Linux: PipeWire/GStreamer → H.264 → WebRTC)"
 
 [dependencies]
 anyhow = "1"
@@ -16,14 +16,19 @@ tower-http = { version = "0.6", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 webrtc = "0.12"
-cpal = "0.15"
 opus = "0.3"
-windows-core = "0.61"
 # glow (OpenGL) arka ucu: varsayılan wgpu, farklı bir windows crate sürümü çekip
 # derlemeyi kırıyor; panel için glow fazlasıyla yeterli.
 eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow"] }
 
-[dependencies.windows]
+# --- Windows'a özel ---
+[target.'cfg(windows)'.dependencies]
+# WASAPI loopback yalnız Windows yolunda kullanılır; Linux'ta ses PipeWire'dan
+# (GStreamer pulsesrc monitörü) gelir, bu yüzden cpal/ALSA bağımlılığı gerekmez.
+cpal = "0.15"
+windows-core = "0.61"
+
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.61"
 features = [
     "Win32_Devices_DeviceAndDriverInstallation",
@@ -50,3 +55,15 @@ features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Shell_PropertiesSystem",
 ]
+
+# --- Linux'a özel ---
+[target.'cfg(target_os = "linux")'.dependencies]
+# Ekran yakalama izni/oturumu D-Bus üzerinden alınır (Mutter ScreenCast):
+# sanal monitör (--extend) ve monitör listesi de buradan gelir.
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# prctl(PR_SET_PDEATHSIG): alt süreçler ebeveyn ölünce kesin ölsün.
+libc = "0.2"
+# eframe/winit'in Linux pencere arka uçları (default-features=false olduğu için
+# elle açılmalı; yoksa panel "no display backend" ile açılmaz).
+eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }

@@ -18,7 +18,7 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_Get_Device_Interface_ListW, CM_Get_Device_Interface_List_SizeW,
     CM_GET_DEVICE_INTERFACE_LIST_PRESENT, CR_SUCCESS,
 };
-use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, RECT};
+use windows::Win32::Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::Graphics::Gdi::{
     ChangeDisplaySettingsExW, CDS_UPDATEREGISTRY, DEVMODEW, DISP_CHANGE_SUCCESSFUL,
@@ -30,6 +30,8 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::Win32::System::IO::{DeviceIoControl, GetOverlappedResult, OVERLAPPED};
+
+use crate::engine::Rect;
 
 // parsec-vdd cihaz arayüzü GUID'i: {00b41627-04c4-429e-a26e-0265cf50c8fa}
 const VDD_INTERFACE_GUID: GUID = GUID::from_u128(0x00b41627_04c4_429e_a26e_0265cf50c8fa);
@@ -171,7 +173,8 @@ pub struct OutputInfo {
     pub adapter_index: u32,
     pub output_index: u32,
     pub device_name: String,
-    pub rect: RECT,
+    /// Masaüstündeki dikdörtgen (platformdan bağımsız tip — Linux tarafı da aynısını kullanır).
+    pub rect: Rect,
 }
 
 pub fn all_outputs() -> Vec<OutputInfo> {
@@ -198,7 +201,10 @@ pub fn all_outputs() -> Vec<OutputInfo> {
                         adapter_index: a,
                         output_index: o,
                         device_name: name,
-                        rect: desc.DesktopCoordinates,
+                        rect: {
+                            let d = desc.DesktopCoordinates;
+                            Rect { left: d.left, top: d.top, right: d.right, bottom: d.bottom }
+                        },
                     });
                 }
             }
@@ -240,6 +246,12 @@ pub fn set_display_mode(device_name: &str, w: u32, h: u32, hz: u32) -> Result<()
 /// Cihaz adına göre çıkışı yeniden bul (mod değişince konum/boyut tazelenir).
 pub fn find_output_by_name(name: &str) -> Option<OutputInfo> {
     all_outputs().into_iter().find(|o| o.device_name == name)
+}
+
+/// Sürücü kurulu mu? (Panelde "indir ve kur" uyarısını göstermek için.)
+/// Cihaz arayüzünü açıp hemen kapatır; yan etkisi yoktur.
+pub fn is_installed() -> bool {
+    Vdd::open().is_ok()
 }
 
 /// Sanal monitörü takar ve yeni beliren çıkışı bulur.

@@ -23,11 +23,34 @@ Release: etiket v0.3.5 push'landı; exe release'i gh CLI ile eklenir
 
 ## Proje Nedir?
 
-Windows laptop ekranını **kablosuz** olarak Samsung (Tizen) TV'ye/tarayıcıya taşıyan
-Rust projesi. Nihai hedef: TV'yi gerçek "ikinci monitör" yapmak (Win+P Genişlet gibi,
+Windows **ve Linux** masaüstünü **kablosuz** olarak Samsung (Tizen) TV'ye/tarayıcıya
+taşıyan Rust projesi. Nihai hedef: TV'yi gerçek "ikinci monitör" yapmak (Win+P Genişlet gibi,
 mouse kenardan TV'ye geçecek). Şimdilik aynalama (mirror) çalışıyor.
 
-## Derleme ve Çalıştırma
+## Linux'ta Derleme ve Çalıştırma (2026-08-31)
+
+```bash
+bash scripts/setup-arch.sh        # veya scripts/setup-ubuntu.sh
+cargo build --release
+./target/release/mirror-host --bind 0.0.0.0:47000            # aynalama
+./target/release/mirror-host --extend --mode 1920x1080@60    # GERÇEK 2. ekran
+./target/release/mirror-host --tv-audio                      # ses yalnız TV'den
+./target/release/mirror-host --restore-audio                 # takılan sesi düzelt
+```
+
+- Platform ayrımı `main.rs`'te `#[cfg]` + `#[path]` ile: `cursor` → cursor_win.rs /
+  cursor_linux.rs, `audio_route` → audio_route_win.rs / audio_route_linux.rs.
+- Cargo.toml'da `windows`/`windows-core`/`cpal` artık **yalnız** `cfg(windows)`
+  hedefinde; `zbus`/`futures-util` yalnız Linux'ta. eframe Linux'ta ayrıca
+  `x11`+`wayland` feature'larını ister (default-features=false olduğu için).
+- Linux'ta ffmpeg KULLANILMAZ: buradaki ffmpeg 8.1.2'de `pipewiregrab` filtresi
+  yok ve `-devices` listesinde pipewire yok → Wayland yakalaması imkânsız.
+  GStreamer `pipewiresrc` bu işi yapıyor.
+- Bağımlılık (ölçüldü, `ldd`): ikili yalnız libc/libgcc/libm/**libopus**'a bağlı;
+  wayland/X11/GL çalışma anında dlopen ediliyor. Linux'ta **cmake GEREKMİYOR**
+  (opus crate'i pkg-config ile sistem libopus'unu buluyor — Windows'tan farklı).
+
+## Derleme ve Çalıştırma (Windows)
 
 ```powershell
 # Proje kökünde (workspace: host/ üyesi):
@@ -120,12 +143,22 @@ host/src/encoder.rs      MF asenkron donanım H.264 MFT; düşük gecikme/CBR; V
 host/src/pipeline.rs     Cihaz kurulumu + capture/encode iş parçacıkları + broadcast kanalı
 host/src/session.rs      İzleyici başına WebRTC oturumu (track + PLI görevi + imleç pompası)
 host/src/signaling.rs    axum: / → tv-app statik, /ws → WebSocket; AppState
-host/src/cursor.rs       GetCursorInfo 125Hz → watch kanalı; output_rect ile çoklu monitör normalizasyonu
-host/src/audio.rs        WASAPI loopback (cpal) → stereo/48kHz → Opus 20ms çerçeveler → broadcast
+host/src/cursor_win.rs   (Windows) GetCursorInfo 125Hz → watch kanalı; output_rect ile çoklu monitör
+host/src/audio.rs        Ses: Windows WASAPI loopback (cpal) / Linux PipeWire monitör
+                         (gst pulsesrc @DEFAULT_MONITOR@) → ORTAK Opus 20ms → broadcast
 host/src/vdd.rs          parsec-vdd denetimi: sanal monitör tak/yaşat + DXGI çıkış keşfi (--extend)
-host/src/audio_route.rs  --tv-audio: IPolicyConfig ile varsayılan ses aygıtını sanala çevir/geri al
+host/src/audio_route_win.rs (Windows) --tv-audio: IPolicyConfig ile varsayılan aygıtı çevir/geri al
 host/src/focus_follow.rs --cursor-follow: odak başka monitöre geçince imleci ışınla (WinEvent kancası)
 host/src/protocol.rs     JSON mesajları: SignalMessage{Offer,Answer}, CursorState
+host/src/engine.rs       ORTAK çekirdek: PipelineConfig/Handles, EncodedFrame, Rect,
+                         alt süreç kurma + Annex-B→AU ayrıştırma (ffmpeg VE gst kullanır)
+host/src/screencast.rs   (Linux) Mutter ScreenCast D-Bus: RecordMonitor (aynalama),
+                         RecordVirtual (sanal 2. ekran), monitör listesi
+host/src/gst_engine.rs   (Linux) gst-launch alt süreci: pipewiresrc/ximagesrc → H.264
+host/src/cursor_linux.rs (Linux) imleç videoya gömülü → kanal sessiz kalır
+host/src/audio_route_linux.rs (Linux) pactl module-null-sink ile varsayılan çıkışı çevirme
+scripts/setup-arch.sh    Arch/CachyOS bağımlılık kurulumu + doğrulama
+scripts/setup-ubuntu.sh  Ubuntu/Debian bağımlılık kurulumu + doğrulama
 tv-app/index.html        TV/tarayıcı istemcisi iskeleti (video + imleç svg + kurulum paneli)
 tv-app/css/style.css     Tam ekran siyah tema, object-fit: contain
 tv-app/js/app.js         WS sinyalleşme + WebRTC alıcı + imleç çizimi + istatistik ('0' tuşu)
@@ -198,6 +231,153 @@ tv-app/icon.png          Basit uygulama ikonu (117x117)
 - Teşhis araçları: host 3sn'de bir "Boru hattı: yakalama X fps | kodlama Y fps | Z Mb/s"
   ve "MFT 3sn: ... olay bekleme/kare bekleme/submit/drain" loglar. Claude başlatırsa
   log: %TEMP%\mirror-host.log. TV/tarayıcı istatistiği: OK tuşu / çift dokunuş.
+
+**Linux / GNOME / GStreamer (2026-08-31 — YENİDEN KEŞFETME):**
+- **Sanal monitör caps'ine `framerate` YAZMA.** `RecordVirtual` sonrası
+  `pipewiresrc ! video/x-raw,format=BGRx,width=W,height=H` ile pazarlık TAMAM ve
+  Mutter "Meta-0" monitörünü oluşturuyor; caps'e `framerate=60/1` eklenince
+  "stream error: no more input formats" ile düşüyor ve monitör HİÇ oluşmuyor.
+  Kare hızı aşağıda `videorate` ile sınırlanır.
+- **Mutter oturumu D-Bus BAĞLANTISINA bağlıdır**: bağlantı kapanınca yakalama ve
+  sanal monitör kendiliğinden gider (Windows'taki keepalive'ın bedava karşılığı).
+  Bu yüzden `screencast::Capture` yayın boyunca canlı tutulmalı (main.rs `Guard`).
+  Doğrulandı: süreç ölünce Meta-0 monitörü listeden kayboluyor.
+- **`gst-launch` ile busctl/gdbus TEK ATIŞ ÇALIŞMAZ**: busctl komutu bitince
+  bağlantı kapanır, oturum ölür. Test ederken oturumu canlı tutan bir süreç şart
+  (python + Gio ya da bizim host).
+- **nvh264enc serbest bırakılınca Constrained Baseline üretir** (CABAC yok →
+  aynı bit hızında daha kötü görüntü). Windows'taki ffmpeg h264_nvenc High veriyor.
+  Çözüm: çıkış caps'ine `profile=high` yaz — ffprobe ile High/L5.2 doğrulandı.
+  VA-API kodlayıcılarında zorlanmıyor (LP kipinde High olmayabilir, pazarlık düşer).
+- **Kodlayıcıda `aud` özelliği ŞART**: `engine.rs` akışı AUD'lere (NAL 9) bakarak
+  karelere bölüyor. `aud` olmayan eleman (ölçüldü: `openh264enc`) sessizce bozuk
+  akış verirdi → `encoder_usable()` gst-inspect çıktısına bakıp baştan eliyor.
+- **SIGTERM yakalanmalı**: `tokio::signal::ctrl_c()` yalnız SIGINT'tir; `pkill`,
+  `systemctl stop` ve oturum kapatma SIGTERM yollar. Yakalanmadığında ölçüldü:
+  `--tv-audio` sonrası varsayılan ses aygıtı sanal çıkışta TAKILI kalıyor.
+  signaling.rs'te `terminate_signal()` eklendi; SIGINT ve SIGTERM ikisi de temiz.
+- **Ses kaynağı `@DEFAULT_MONITOR@`** olmalı (sabit aygıt adı değil): varsayılan
+  çıkış `--tv-audio` ile değişince yakalama kendiliğinden yeni aygıtı dinler.
+  Ölçüldü: 248 paket/5sn (nominal 250).
+- **`videorate max-rate` canlı PipeWire kaynağında TAM kesmiyor**: sabit hızlı
+  kaynakta (videotestsrc 144fps) 59.4 fps'e tam kesiyor, ama canlı ekranda 60
+  hedefine karşı 52–84 fps ölçüldü. `do-timestamp` açık/kapalı fark etmedi.
+  Kodlayıcı yetiştiği için SORUN DEĞİL — gereksiz yere kurcalama.
+- Wayland'da küresel imleç konumu OKUNAMAZ (güvenlik). XWayland'ın
+  `XQueryPointer`'ı yalnız imleç X pencerelerindeyken güncellenir → güvenilmez.
+  Bu yüzden imleç videoya gömülüyor (`cursor-mode=1`) ve imleç kanalı sessiz.
+- **Headless Chrome'da WebCodecs `configure()` başarısız olur**: istemci
+  `hardwareAcceleration:'prefer-hardware'` istiyor, GPU'suz headless'ta
+  sağlanamıyor (`isConfigSupported` yine de true döner — yanıltıcı).
+  Bu bir TEST ORTAMI kısıtı, port hatası değil; gerçek cihazda sorun yok.
+  Headless'ta doğrulamak için RTP yoluna zorla: localStorage'a
+  `mirror.cv=2` VE `mirror.transport=rtp` yaz (yalnız transport yazmak yetmez —
+  istemcinin tek seferlik onarımı onu siler).
+
+**Linux'tan Windows derlemesini DOĞRULAMA (2026-08-31, çalışan tarif):**
+Windows kodu değiştirildiğinde Linux'ta tip kontrolü yapılabilir — mingw ve sudo
+GEREKMEZ, gerçek MSVC hedefi kullanılır:
+```bash
+cargo install cargo-xwin                      # bir kez
+rustup target add x86_64-pc-windows-msvc      # bir kez
+curl -sSL -o /tmp/n.zip https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip
+unzip -o /tmp/n.zip -d ~/.local/bin           # cmake "Ninja" istiyor
+
+PATH="$HOME/.local/bin:$PATH" OPUS_LIB_DIR=/tmp/fakeopus OPUS_STATIC=1 \
+  cargo xwin check --target x86_64-pc-windows-msvc
+```
+Neden `OPUS_LIB_DIR` hilesi: `audiopus_sys` opus'u kaynaktan derliyor ve
+clang-cl ile SSE4.1 dosyaları patlıyor ("requires target feature 'sse4.1'");
+`CFLAGS_x86_64_pc_windows_msvc=-msse4.1` cargo-xwin'in kendi `-DCMAKE_C_FLAGS`'ı
+tarafından ezildiği için İŞE YARAMADI. `check` bağlama yapmadığından sahte bir
+lib dizini göstermek yeterli (audiopus_sys dizini doğrulamıyor). Ayrıca
+`CMAKE_POLICY_VERSION_MINIMUM=3.5` gerekiyordu (opus'un CMakeLists'i CMake 4 ile
+uyumsuz) — bu ikisi opus derlenirse yine lazım olur.
+DOĞRULANDI: `.d` dosyası tam olarak Windows modül setini listeliyor
+(capture/convert/encoder/ffmpeg_engine/focus_follow/pipeline/vdd +
+cursor_win + audio_route_win + engine + gui), Linux dosyaları YOK.
+SINIR: bu yalnız TİP KONTROLÜ. Bağlama ve çalışma zamanı doğrulanmaz;
+gerçek exe hâlâ Windows'ta derlenmeli.
+
+**Güvenlik duvarı / ağ erişimi (2026-08-31 — yaşandı):**
+- **WebRTC yalnız HTTP portuyla ÇALIŞMAZ.** 47000/tcp sayfayı ve sinyalleşmeyi
+  taşır; medya ayrı UDP portlarından gider. Varsayılanda webrtc her oturumda
+  çekirdeğin geçici havuzundan (Linux: 32768-60999) RASTGELE port seçiyordu →
+  güvenlik duvarı varken "sayfa açılıyor ama görüntü gelmiyor" ya da 28 bin port
+  açma zorunluluğu. Çözüm: `session.rs`'te `SettingEngine::set_udp_network(
+  UDPNetwork::Ephemeral(EphemeralUDP::new(ICE_PORT_MIN, ICE_PORT_MAX)))` ile
+  aralık **47100-47120**'ye sabitlendi (doğrulandı: `ss` ile 47104/47111).
+  webrtc 0.12'de `set_ephemeral_udp_port_range` YOK, `set_udp_network` kullanılır.
+- **UDP 5353 (mDNS) de ŞART** — atlanırsa "sayfa açılıyor, görüntü yok" olur.
+  Chrome/Edge varsayılanda yerel IP'leri gizler ve ICE adaylarını
+  `<uuid>.local` olarak yollar (WebRtcHideLocalIpsWithMdns). webrtc-rs bunları
+  kabul eder (varsayılan kip `QueryOnly`) ama çözmek için multicast DNS sorgusu
+  atar; 5353 kapalıysa yanıt gelmez, adaylar düşer, uzak aday sayısı SIFIR olur
+  ve log `pingAllCandidates ... no candidate pairs` diye döner durur.
+  ÖLÇÜLDÜ: Chrome varsayılanda 3 adayın 3'ü de mDNS; `--disable-features=
+  WebRtcHideLocalIpsWithMdns` ile 0'ı mDNS. (CLAUDE.md'deki headless test
+  tarifinin o bayrağı istemesinin sebebi de tam olarak budur.)
+  Teşhis artık kodda: `session.rs` her Offer'da "İstemci ICE adayları: N
+  (mDNS/.local: M)" logluyor ve hepsi mDNS ise uyarı basıyor.
+- Açılması gereken portlar (LAN ile sınırlı tutun):
+  `47000/tcp` + `47100:47120/udp` + `5353/udp`.
+  ufw: `sudo ufw allow from <ağ>/24 to any port 47000 proto tcp`
+       `sudo ufw allow from <ağ>/24 to any port 47100:47120 proto udp`
+       `sudo ufw allow from <ağ>/24 to any port 5353 proto udp`
+  Ağ multicast'i tamamen engelliyorsa mDNS hiç çalışmaz; o zaman izleyici
+  tarafında `chrome://flags/#enable-webrtc-hide-local-ips-with-mdns` → Disabled.
+- **STUN/TURN YOK** (`RTCConfiguration::default()`): yalnız yerel adaylar
+  toplanır. Yani izleyici AYNI YEREL AĞDA olmalı; internet üzerinden bağlanmak
+  port yönlendirme + STUN/TURN ister, bu proje bunu yapmıyor.
+- Kurumsal/ortak ağlarda "client isolation" (AP isolation) cihazlar arası
+  trafiği engelleyebilir — o durumda hiçbir güvenlik duvarı kuralı yardımcı olmaz.
+
+**Linux SİYAH EKRAN + kaçak süreç (2026-08-31, ikisi de yaşandı ve ölçüldü):**
+- **`gop-size` KARE cinsindendir, PipeWire ise DAMAGE ile kare üretir.** Hareketsiz
+  ekranda (özellikle `--extend` ile açılan boş sanal monitörde) akış ~1-2 fps'e
+  düşer ve `gop-size=60` anahtar kare aralığını 30-60 SANİYEYE çıkarır. İstemci
+  anahtar kare gelmeden hiçbir şey çizmediği için sonuç SİYAH EKRAN'dır.
+  ÖLÇÜLDÜ (önce): boş sanal ekranda 33 sn → 57 kare, **0 anahtar kare**.
+  ÇÖZÜM: `videorate max-rate=N drop-only=true` YERİNE sabit kare hızı —
+  `videorate ! video/x-raw,framerate=N/1`. drop-only KALDIRILMALI ki videorate
+  eksik kareleri çoğaltsın. ÖLÇÜLDÜ (sonra): 60.5 fps, anahtar kare aralığı 1 sn.
+  Windows'ta ddagrab zaten sabit hızda ürettiği için bu sorun orada YOK.
+  Yan etki: hareketsiz ekran artık gerçek bant harcar (12 Mb/s hedefte ~4.5 Mb/s;
+  neredeyse tamamı saniyede bir anahtar kare). VBR denendi, FARK ETMEDİ (4.51 vs
+  4.54) — bu CBR dolgusu değil, anahtar karenin kendi maliyeti. Windows ffmpeg
+  yolu da (`-g fps`) aynı maliyeti öder; bant düşürmek isteyen `--bitrate` kısar.
+- **Alt süreçler öksüz kalıyordu.** Bekçi iş parçacığı yalnız düzgün kapanışta
+  öldürüyor; ani ölümde ya da bekçi 300 ms uykusundayken çıkışta gst-launch
+  hayatta kalıyor. Boru kırılması da kurtarmıyor: hareketsiz ekranda alt süreç
+  o kadar seyrek yazıyor ki EPIPE'ı dakikalarca fark etmiyor.
+  ÖLÇÜLDÜ: 9 kaçak gst-launch, ~1.5 GB GPU belleği, TÜKENMİŞ NVENC oturumları →
+  sonraki yayın "Failed to open session" alıp x264enc'e (yazılım) düşüyor.
+  ÇÖZÜM: `engine::die_with_parent()` — `prctl(PR_SET_PDEATHSIG, SIGKILL)` +
+  fork/prctl yarışına karşı `getppid()` kontrolü. Doğrulandı: host'a SIGKILL →
+  çocuklar anında ölüyor, sanal monitör de sökülüyor.
+  Windows'ta karşılığı Job Object'tir; YAZILMADI (orada ffmpeg daha sık yazdığı
+  için boru kırılmasıyla ölüyor) — sorun görülürse buraya bakılsın.
+- Teşhis ipucu: panel logunda hareketsiz ekranda "kodlama 1 fps" görüyorsan
+  anahtar kare aralığı patlamıştır; "60 fps" görüyorsan bu hata yok.
+
+**Kurulum betikleri (scripts/, 2026-08-31 — yaşandı):**
+- **Arch'ta `pacman -S --needed <paket>` ile bağımlılık kurma!** Paket kuruluysa
+  ama depoda daha yeni sürüm varsa pacman YÜKSELTMEYE kalkar; bu kısmi yükseltmedir
+  ve tam sürüme sabitli bağımlılar yüzünden "installing X breaks dependency Y
+  required by Z" ile reddedilir (gst-libav, pipewire-alsa, gst-plugin-gtk bunu
+  tetikledi). Doğrusu: `pacman -Qq` ile GERÇEKTEN eksik olanları bul, hiçbiri
+  yoksa pacman'e hiç dokunma; eksik varsa `pacman -Syu --needed <eksikler>`
+  komutunu kullanıcıya göster/onayını al (307 paketlik yükseltme sessizce
+  başlatılmamalı).
+- **Rust'ı pacman listesine KOYMA**: rustup resmî betikle ~/.cargo'ya kuruluyor,
+  `pacman -S rustup` çakışır. Ayrıca `command -v cargo` YETMEZ — rustup
+  ~/.cargo/bin'e kurar ve PATH ancak yeni oturumda etkin olur; `[ -x
+  "$HOME/.cargo/bin/cargo" ]` ile de bak. (rustup fish için
+  ~/.config/fish/conf.d/rustup.fish yazıyor, yeni fish oturumunda cargo hazır.)
+- **`set -o pipefail` + `cmd | grep -q` = SESSİZ YANLIŞ SONUÇ.** grep eşleşmeyi
+  bulunca hemen çıkar, boru kapanır, üstteki komut SIGPIPE ile ölür ve pipefail
+  yüzünden koşul başarısız sayılır → "H.264 kodlayıcı YOK" gibi yanlış rapor
+  (yaşandı). Çözüm: çıktıyı değişkene al, `grep -q ... <<<"$var"` kullan.
 
 **Diğer:**
 - Desktop Duplication RDP oturumunda çalışmaz; DRM içerik siyah olabilir.
@@ -320,6 +500,28 @@ tv-app/icon.png          Basit uygulama ikonu (117x117)
 - Bilinen gözlem: WiFi mesafe/2.4GHz paraziti gecikme yapabiliyor — optimizasyon
   İSTENMEDİKÇE bu konuya girme (kullanıcı bilinçli erteledi; ilk çare 5GHz/Ethernet).
 
+- **LINUX DESTEĞİ — TAMAM (2026-08-31)**: CachyOS/Arch (GNOME 50, Wayland,
+  GTX 1080, sürücü 580) üzerinde uçtan uca doğrulandı. Doğrulananlar:
+  (a) Aynalama: Mutter RecordMonitor → pipewiresrc → nvh264enc → 1080p, kodlama
+      31-84 fps (masaüstü hareketine göre), ffmpeg ile çözüldü: **High/L5.2, 661
+      kare, geçerli akış**. (b) WebRTC: tarayıcı bağlandı, veri kanalı açıldı,
+      "ilk parça geldi 16393 bayt" (16KB parçalama çalışıyor), RTP yolu da seçilip
+      bağlandı. (c) **--extend**: sanal monitör `Meta-0` 1920x1080 olarak x=3840'ta
+      belirdi, süreç ölünce SÖKÜLDÜ. (d) **--tv-audio**: `mirror_tv` null-sink
+      oluştu, varsayılan ona döndü, 248 paket/5sn ses aktı, SIGINT ve SIGTERM'de
+      eski aygıt geri geldi; `--restore-audio` da temizliyor. (e) GUI paneli
+      Wayland'da açıldı. (f) Aynı makineden izlerken ses geri besleme koruması
+      çalıştı ("bu makine; ses kapalı").
+  DOĞRULANMAYAN: KDE/wlroots (portal yolu yazılmadı), X11 oturumu (kod var,
+  `ximagesrc` ile, ama gerçek X11 oturumunda denenmedi), Intel/AMD VA-API
+  kodlayıcıları (bu makinede yok — `vah264enc`'in `aud` özelliği olduğu
+  VARSAYILDI; yoksa `encoder_usable` eler ve x264enc'e düşer).
+- **Windows derlemesi bu portta DERLENEREK doğrulanamadı**: Linux'tan
+  `cargo check --target x86_64-pc-windows-gnu` için `mingw-w64-gcc` gerekiyor
+  (opus'un C derlemesi), o da sudo istiyor. Değişiklikler mekanik tutuldu
+  (EncodedFrame/PipelineConfig `engine.rs`'e taşınıp eski yollardan yeniden
+  dışa verildi). Windows'ta ilk fırsatta `cargo build --release` ile doğrula.
+
 ## Durum ve Yol Haritası
 
 - **Faz 1 — Aynalama MVP: TAMAM** (kullanıcı testinden geçti).
@@ -393,6 +595,16 @@ tv-app/icon.png          Basit uygulama ikonu (117x117)
 - Steam Streaming Speakers aygıtı kullanıcı isteğiyle DEVRE DIŞI bırakıldı
   (pnputil /disable-device "ROOT\SteamStreamingSpeakers\0000"; geri almak:
   /enable-device aynı ID — Steam Remote Play sesi için gerekir).
+- **parsec-vdd de exe'ye GÖMÜLMEZ** (kullanıcı sordu, 2026-08-31): ffmpeg
+  gömülebiliyor çünkü sıradan bir kullanıcı-modu exe'si — bir klasöre açılıp
+  çalıştırılıyor. parsec-vdd ise ÇEKİRDEK MODU ekran sürücüsü: sürücü deposuna
+  INF + imza kataloğuyla kurulmalı, bu da yönetici (UAC) ister; ayrıca sürücü
+  Parsec'e ait, ikiliyi yeniden dağıtmak lisans açısından güvenli değil.
+  Kurulumcuyu gömsek bile UAC istemi ve kurulum adımı yine kaçınılmaz.
+  Bu yüzden VB-CABLE'daki çözümün aynısı: panelde "İndir ve kur" düğmesi
+  (gui.rs `install_vdd`, resmî builds.parsec.app adresinden, `/S` + `-Verb RunAs`).
+  Sürücü yoksa "genişlet" seçilince uyarı çıkar; AYNALAMA sürücüsüz çalışır.
+  `vdd::is_installed()` durumu bildirir.
 - **VB-CABLE exe'ye GÖMÜLMEZ**: (a) çekirdek sürücüsü, kurulumcu+admin şart;
   (b) VB-Audio lisansı yeniden dağıtımı izne bağlar (ffmpeg GPL'inden farklı).
   Bunun yerine panel "İndir ve kur" butonu sunar (tv-audio açık + CABLE yoksa

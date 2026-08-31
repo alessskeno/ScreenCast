@@ -18,7 +18,7 @@ use tokio::sync::{broadcast, watch};
 use tower_http::services::ServeDir;
 
 use crate::audio::AudioFrame;
-use crate::encoder::EncodedFrame;
+use crate::engine::EncodedFrame;
 use crate::protocol::CursorState;
 
 #[derive(Clone)]
@@ -43,6 +43,40 @@ async fn clock() -> impl IntoResponse {
     axum::response::Html(CLOCK_HTML)
 }
 
+/// SIGTERM beklemesi (Unix). `pkill`, `systemctl stop` ve oturum kapatma bunu
+/// yollar; yakalanmazsa süreç aniden ölür ve kapanış temizliği ÇALIŞMAZ —
+/// ölçüldü: Linux'ta `--tv-audio` sonrası varsayılan ses aygıtı sanal çıkışta
+/// takılı kalıyordu. Windows'ta karşılığı yok, orada sonsuza dek bekler.
+#[cfg(unix)]
+async fn terminate_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut sig) => {
+            sig.recv().await;
+        }
+        Err(_) => std::future::pending().await,
+    }
+}
+
+#[cfg(not(unix))]
+async fn terminate_signal() {
+    std::future::pending().await
+}
+
+/// Bilgisayar adı: Windows'ta COMPUTERNAME, Linux'ta HOSTNAME ya da
+/// /etc/hostname (ağ taramasında hangi PC olduğu görünsün diye).
+fn host_name() -> String {
+    if let Ok(name) = std::env::var("COMPUTERNAME") {
+        return name;
+    }
+    if let Ok(name) = std::env::var("HOSTNAME") {
+        return name;
+    }
+    std::fs::read_to_string("/etc/hostname")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
+}
+
 /// Keşif ucu: TV/tarayıcı istemcisi ağı tarayıp bu yanıtı arar.
 /// CORS başlığı şart — istemci farklı IP'lere (farklı origin) fetch atar.
 async fn ping() -> impl IntoResponse {
@@ -50,7 +84,7 @@ async fn ping() -> impl IntoResponse {
         [(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")],
         axum::Json(serde_json::json!({
             "app": "mirror-host",
-            "name": std::env::var("COMPUTERNAME").unwrap_or_default(),
+            "name": host_name(),
         })),
     )
 }
@@ -112,10 +146,14 @@ pub async fn serve(
             });
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {},
+                _ = terminate_signal() => {},
                 _ = stdin_eof => {},
             }
         } else {
-            let _ = tokio::signal::ctrl_c().await;
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = terminate_signal() => {},
+            }
         }
         tracing::info!("Kapatılıyor…");
     })

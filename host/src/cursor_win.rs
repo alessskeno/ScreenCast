@@ -8,30 +8,30 @@ use std::time::Duration;
 
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
-use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
 use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSOR_SHOWING};
 
+use crate::engine::Rect;
 use crate::protocol::CursorState;
 
 /// Yakalanan monitörün sanal masaüstündeki dikdörtgenini bulur.
 /// (Çoklu monitörde imleç koordinatları bu dikdörtgene göre normalize edilmeli.)
-pub fn output_rect(output_index: u32) -> Option<RECT> {
+pub fn output_rect(output_index: u32) -> Option<Rect> {
     unsafe {
         let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
         let adapter = factory.EnumAdapters1(0).ok()?;
         let output = adapter.EnumOutputs(output_index).ok()?;
-        let desc = output.GetDesc().ok()?;
-        Some(desc.DesktopCoordinates)
+        let d = output.GetDesc().ok()?.DesktopCoordinates;
+        Some(Rect { left: d.left, top: d.top, right: d.right, bottom: d.bottom })
     }
 }
 
 /// İmleci 125 Hz'de izler; koordinatları `rect` içine normalize eder.
 /// İmleç başka monitördeyse `visible=false` gönderilir (TV'de gizlenir).
-pub fn spawn(rect: RECT) -> watch::Receiver<CursorState> {
+pub fn spawn(rect: Rect) -> watch::Receiver<CursorState> {
     let (tx, rx) = watch::channel(CursorState { x: 0.5, y: 0.5, visible: false });
-    let w = (rect.right - rect.left).max(1) as f32;
-    let h = (rect.bottom - rect.top).max(1) as f32;
+    let w = rect.width() as f32;
+    let h = rect.height() as f32;
 
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_millis(8));

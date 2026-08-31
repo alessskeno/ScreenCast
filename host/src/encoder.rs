@@ -42,15 +42,9 @@ use windows::Win32::System::Com::CoTaskMemFree;
 use crate::pipeline::FrameTex;
 
 /// Kodlanmış tek bir H.264 erişim birimi (Annex-B).
-pub struct EncodedFrame {
-    pub data: Bytes,
-    pub is_keyframe: bool,
-    /// Nominal kare süresi (1/fps) — gerçek süre bilinmiyorsa yedek.
-    pub duration: Duration,
-    /// Karenin gerçek yakalama zamanı (100ns). RTP zaman damgası bununla
-    /// ilerletilmeli; yoksa atlanan karelerde alıcı saati geri kalır.
-    pub ts_100ns: i64,
-}
+/// Tanım platformdan bağımsız `engine` modülünde; buradan yeniden dışa verilir
+/// ki Windows tarafındaki `crate::encoder::EncodedFrame` kullanımları değişmesin.
+pub use crate::engine::EncodedFrame;
 
 // mftransform.h'daki MediaEventType değerleri (ABI sabitleri):
 const EV_NEED_INPUT: u32 = 601; // METransformNeedInput

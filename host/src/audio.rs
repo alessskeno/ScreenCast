@@ -1,8 +1,12 @@
 //! Faz 2: Sistem sesi yakalama ve Opus kodlama.
 //!
-//! WASAPI loopback (cpal ile: çıkış aygıtı girdi olarak açılır) → 48 kHz stereo
-//! f32 örnekler → 20 ms'lik çerçeveler → Opus (128 kb/s) → broadcast kanalı.
-//! Her WebRTC oturumu kanala abone olup kendi ses track'ine yazar.
+//! Yakalama platforma göre değişir, kodlama ortaktır:
+//! - Windows: WASAPI loopback (cpal ile çıkış aygıtı girdi olarak açılır).
+//! - Linux:   PipeWire/PulseAudio'nun varsayılan çıkış "monitör" kaynağı
+//!   (`@DEFAULT_MONITOR@`) GStreamer alt süreciyle okunur.
+//!
+//! Ortak yol: 48 kHz stereo f32 örnekler → 20 ms'lik çerçeveler → Opus (128 kb/s)
+//! → broadcast kanalı. Her WebRTC oturumu kanala abone olup kendi ses track'ine yazar.
 //!
 //! Ses aygıtı açılamazsa uygulama sessiz devam eder (video etkilenmez).
 
@@ -11,9 +15,8 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bytes::Bytes;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 
@@ -26,6 +29,16 @@ pub struct AudioFrame {
 const TARGET_RATE: u32 = 48_000; // Opus'un ana örnekleme hızı
 const FRAME_MS: usize = 20;
 const FRAME_SAMPLES: usize = TARGET_RATE as usize / 1000 * FRAME_MS; // kanal başına 960
+
+/// Platformdan bağımsız ham PCM kaynağı.
+struct PcmSource {
+    rx: mpsc::Receiver<Vec<f32>>,
+    rate: u32,
+    channels: usize,
+    /// Kaynağı hayatta tutan tutamak (cpal akışı / gst alt süreci).
+    /// Düşerse yakalama durur; bu yüzden kodlama döngüsü boyunca tutulur.
+    _keep: Box<dyn std::any::Any>,
+}
 
 pub fn start(stop: Arc<AtomicBool>) -> Option<broadcast::Sender<Arc<AudioFrame>>> {
     let (tx, _) = broadcast::channel::<Arc<AudioFrame>>(256);
@@ -43,26 +56,31 @@ pub fn start(stop: Arc<AtomicBool>) -> Option<broadcast::Sender<Arc<AudioFrame>>
 }
 
 fn run(tx: broadcast::Sender<Arc<AudioFrame>>, stop: Arc<AtomicBool>) -> Result<()> {
+    let src = open_source()?;
+    encode_loop(src, tx, stop)
+}
+
+// ---------------------------------------------------------------- Windows kaynağı
+
+/// WASAPI loopback: varsayılan ÇIKIŞ aygıtını girdi akışı olarak açar.
+#[cfg(windows)]
+fn open_source() -> Result<PcmSource> {
+    use anyhow::Context;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
     let host = cpal::default_host();
-    // Loopback: varsayılan ÇIKIŞ aygıtını girdi akışı olarak aç (WASAPI özelliği).
-    let device = host
-        .default_output_device()
-        .context("varsayılan ses çıkış aygıtı yok")?;
-    let config = device
-        .default_output_config()
-        .context("ses aygıtı yapılandırması alınamadı")?;
-    let src_rate = config.sample_rate().0;
-    let src_channels = config.channels() as usize;
+    let device = host.default_output_device().context("varsayılan ses çıkış aygıtı yok")?;
+    let config = device.default_output_config().context("ses aygıtı yapılandırması alınamadı")?;
+    let rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
     info!(
         "Ses: {} ({} Hz, {} kanal) → Opus 48 kHz stereo 128 kb/s",
         device.name().unwrap_or_default(),
-        src_rate,
-        src_channels
+        rate,
+        channels
     );
 
-    // Yakalama geri çağrısından kodlayıcı iş parçacığına ham örnek taşı.
-    let (pcm_tx, pcm_rx) = mpsc::channel::<Vec<f32>>();
-
+    let (pcm_tx, rx) = mpsc::channel::<Vec<f32>>();
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             &config.into(),
@@ -83,9 +101,113 @@ fn run(tx: broadcast::Sender<Arc<AudioFrame>>, stop: Arc<AtomicBool>) -> Result<
         other => anyhow::bail!("desteklenmeyen ses örnek biçimi: {other:?}"),
     };
     stream.play().context("ses akışı başlatılamadı")?;
+    Ok(PcmSource { rx, rate, channels, _keep: Box::new(stream) })
+}
 
-    let mut encoder = opus::Encoder::new(TARGET_RATE, opus::Channels::Stereo, opus::Application::Audio)
-        .context("Opus kodlayıcı oluşturulamadı")?;
+// ------------------------------------------------------------------ Linux kaynağı
+
+/// Alt süreci düşürüldüğünde öldüren sarmalayıcı (yayın durunca ses de dursun).
+#[cfg(target_os = "linux")]
+struct ChildGuard(std::process::Child);
+
+#[cfg(target_os = "linux")]
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// PipeWire/PulseAudio monitör kaynağı: `@DEFAULT_MONITOR@` varsayılan çıkışın
+/// monitörünü işaret eder ve varsayılan aygıt değişince kendiliğinden takip eder
+/// (`--tv-audio` sanal çıkışa geçtiğinde de doğru kaynağı dinler).
+///
+/// Doğrudan 48 kHz stereo F32LE istenir; böylece kodlama döngüsündeki yeniden
+/// örnekleme yolu Linux'ta hiç çalışmaz.
+#[cfg(target_os = "linux")]
+fn open_source() -> Result<PcmSource> {
+    use anyhow::Context;
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let device = std::env::var("MIRROR_AUDIO_SOURCE").unwrap_or_else(|_| "@DEFAULT_MONITOR@".into());
+    let mut cmd = Command::new("gst-launch-1.0");
+    // Host ölürse ses alt süreci de ölsün (bkz. engine::die_with_parent).
+    crate::engine::die_with_parent(&mut cmd);
+    let mut child = cmd
+        .args([
+            "-q",
+            "pulsesrc",
+            &format!("device={device}"),
+            "provide-clock=false",
+            "do-timestamp=true",
+            // ~10 ms yakalama gecikmesi: Opus çerçevesi 20 ms, daha küçüğü anlamsız.
+            "latency-time=10000",
+            "buffer-time=40000",
+            "!",
+            "audioconvert",
+            "!",
+            "audioresample",
+            "!",
+            "audio/x-raw,format=F32LE,channels=2,rate=48000,layout=interleaved",
+            "!",
+            "fdsink",
+            "fd=1",
+            "sync=false",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context(
+            "gst-launch-1.0 ile ses yakalanamadı \
+             (Arch: gst-plugins-good, Ubuntu: gstreamer1.0-plugins-good gerekir)",
+        )?;
+    let mut stdout = child.stdout.take().context("ses alt sürecinin stdout'u yok")?;
+    info!("Ses: {device} (PipeWire monitör) → Opus 48 kHz stereo 128 kb/s");
+
+    let (pcm_tx, rx) = mpsc::channel::<Vec<f32>>();
+    std::thread::Builder::new().name("audio-read".into()).spawn(move || {
+        // 20 ms stereo = 960 kare = 7680 bayt (tam bir Opus çerçevesi).
+        //
+        // `read_exact` ŞART, `read` DEĞİL: boru okuması 4'ün katı olmayan bir
+        // sayıda bayt döndürebilir ve artan 1-3 bayt atılırsa akış kalıcı olarak
+        // bir-iki bayt kayar — bundan sonraki TÜM örnekler bozulur (L/R yer
+        // değiştirir, gürültü olur). read_exact tampon dolana kadar bekleyerek
+        // hizayı kendiliğinden korur.
+        let mut buf = [0u8; FRAME_SAMPLES * 2 * 4];
+        loop {
+            if stdout.read_exact(&mut buf).is_err() {
+                return; // akış bitti ya da alt süreç öldü
+            }
+            let samples: Vec<f32> = buf
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            if pcm_tx.send(samples).is_err() {
+                return;
+            }
+        }
+    })?;
+
+    Ok(PcmSource { rx, rate: TARGET_RATE, channels: 2, _keep: Box::new(ChildGuard(child)) })
+}
+
+// --------------------------------------------------------------- Ortak kodlama
+
+/// Ham PCM'i stereo 48 kHz'e getirip 20 ms'lik Opus paketleri üretir.
+fn encode_loop(
+    src: PcmSource,
+    tx: broadcast::Sender<Arc<AudioFrame>>,
+    stop: Arc<AtomicBool>,
+) -> Result<()> {
+    use anyhow::Context;
+
+    let PcmSource { rx: pcm_rx, rate: src_rate, channels: src_channels, _keep } = src;
+
+    let mut encoder =
+        opus::Encoder::new(TARGET_RATE, opus::Channels::Stereo, opus::Application::Audio)
+            .context("Opus kodlayıcı oluşturulamadı")?;
     let _ = encoder.set_bitrate(opus::Bitrate::Bits(128_000));
 
     // Stereo'ya indirgenmiş, 48kHz'e çevrilmiş örnek kuyruğu (interleaved L,R).
@@ -157,5 +279,6 @@ fn run(tx: broadcast::Sender<Arc<AudioFrame>>, stop: Arc<AtomicBool>) -> Result<
             }
         }
     }
+    drop(_keep); // yakalama kaynağını açıkça kapat
     Ok(())
 }
