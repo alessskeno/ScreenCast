@@ -1,5 +1,8 @@
 # ScreenMirroring — Kablosuz İkinci Ekran (Windows / Linux → Tizen TV)
 
+> **Kurulum:** hızlı rehber → **[INSTALL.md](INSTALL.md)**  
+> Arch/CachyOS: `bash scripts/setup-arch.sh` → `cargo build --release` → `./target/release/mirror-host`
+
 Masaüstünü **kablosuz, düşük gecikmeli** olarak Samsung (Tizen) TV'ye ya da
 herhangi bir tarayıcıya taşıyan Rust projesi. **Windows ve Linux** yayın yapabilir;
 TV/tarayıcı istemcisi (`tv-app/`) her ikisinde de aynıdır.

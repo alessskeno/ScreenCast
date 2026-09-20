@@ -134,6 +134,7 @@ GetCursorInfo 125Hz ────────────────────
 Cargo.toml               Workspace + release profili (LTO, panic=abort, opt dev-deps)
 CLAUDE.md                Bu dosya
 README.md                Kullanıcıya dönük kurulum/kullanım (değişiklikte senkron tut)
+INSTALL.md               Hızlı kurulum rehberi (Arch/Ubuntu/Windows/Release/TV)
 .gitignore               target/, *.wgt, loglar
 host/Cargo.toml          Bağımlılıklar: windows 0.61, webrtc 0.12, axum 0.8, tokio...
 host/src/main.rs         GUI/CLI ayrımı (argümansız veya --gui → panel) + CLI (clap) + motor seçimi
