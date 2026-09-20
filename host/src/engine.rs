@@ -75,6 +75,8 @@ pub struct PipelineHandles {
     pub lite_tx: Option<broadcast::Sender<Arc<EncodedFrame>>>,
     pub keyframe_request: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
+    /// Ana kodlayıcı alt süreci öldüyse true (PipeWire/oturum kesilince).
+    pub encoder_dead: Arc<AtomicBool>,
     pub width: u32,
     pub height: u32,
 }

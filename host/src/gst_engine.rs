@@ -98,7 +98,7 @@ impl Source {
 /// kipinde High desteklenmeyebilir ve pazarlık düşerse kodlayıcı boşuna elenir.
 fn encoder_profile(name: &str) -> Option<&'static str> {
     match name {
-        "nvh264enc" | "x264enc" => Some("high"),
+        "nvh264enc" | "x264enc" | "vah264enc" => Some("high"),
         _ => None,
     }
 }
@@ -181,13 +181,18 @@ pub fn start(cfg: PipelineConfig, src: Source) -> Result<PipelineHandles> {
         );
     }
 
-    // Bildirilen boyut yalnız log/imleç yedeği içindir; gerçek boyutu caps pazarlığı
-    // belirler (X11'de tüm masaüstü yakalanırken önceden bilinmez).
-    let (width, height) = match &src {
+    // Bildirilen boyut: TV/WebRTC tarafına yazılan genişlik/yükseklik.
+    // Wayland kesirli ölçek (ör. 1536x864) standart değil → kodlamada 1080p'ye
+    // çekilir; aksi halde bazı TV çözücüleri 2x2/siyah ekran gösterir (ölçüldü).
+    let (raw_w, raw_h) = match &src {
         Source::PipeWire { size: Some((w, h)), .. } => (*w, *h),
         Source::X11 { rect: Some(r), .. } => (r.width() as u32, r.height() as u32),
         _ => cfg.capture_size.unwrap_or((1920, 1080)),
     };
+    let (width, height) = encode_target(raw_w, raw_h, false);
+    if (width, height) != (raw_w, raw_h) {
+        warn!("Kaynak {raw_w}x{raw_h} standart değil → kodlama {width}x{height}");
+    }
 
     let (encoded_tx, _) = broadcast::channel::<Arc<EncodedFrame>>(240);
     // gst-launch alt sürecine anlık IDR zorlatamayız (ffmpeg'de de öyle);
@@ -268,7 +273,15 @@ pub fn start(cfg: PipelineConfig, src: Source) -> Result<PipelineHandles> {
             }
         }
 
-        return Ok(PipelineHandles { encoded_tx, lite_tx, keyframe_request, stop, width, height });
+        return Ok(PipelineHandles {
+            encoded_tx,
+            lite_tx,
+            keyframe_request,
+            stop,
+            encoder_dead: attempt.dead.clone(),
+            width,
+            height,
+        });
     }
     anyhow::bail!("Hiçbir H.264 kodlayıcı çalışmadı (GStreamer)")
 }
@@ -310,21 +323,26 @@ fn spawn_attempt(
     args.push("!".into());
     args.push(format!("video/x-raw,framerate={fps}/1"));
 
-    // Ölçekleme (yalnız hafif akış) + renk dönüşümü, sonra NV12 caps.
+    // Ölçekleme: hafif akış VEYA kesirli/standart-dışı kaynak (1536x864 → 1080p).
+    let (raw_w, raw_h) = source_raw_size(src, cfg);
+    let (ew, eh) = encode_target(raw_w, raw_h, lite);
+    // Her zaman videoscale: (1) kesirli ölçek → 1080p, (2) sanal monitör
+    // dma-buf/modifier'lı BGRx → sistem belleğine kopya. Ölçüldü: aynalama
+    // videoscale ile düzeldi, extend aynı boyutta kalsın diye scale yokken TV
+    // hâlâ 2x2/siyah görebiliyor (donanım çözücü + boş Meta-0).
+    let need_scale = true;
+    let _ = (raw_w, raw_h); // log için start() zaten uyarıyor
     args.push("!".into());
-    if lite {
+    if need_scale {
         args.push("videoscale".into());
         args.push("n-threads=4".into());
+        args.push("method=0".into()); // en yakın komşu / hızlı
         args.push("!".into());
     }
     args.push("videoconvert".into());
     args.push("n-threads=4".into());
     args.push("!".into());
-    args.push(if lite {
-        "video/x-raw,format=NV12,width=1920,height=1080".into()
-    } else {
-        "video/x-raw,format=NV12".to_string()
-    });
+    args.push(format!("video/x-raw,format=NV12,width={ew},height={eh}"));
 
     args.push("!".into());
     args.push(encoder.to_string());
@@ -344,4 +362,24 @@ fn spawn_attempt(
     info!("{label} denemesi: {encoder}");
     tracing::debug!("gst boru hattı: {}", args.join(" "));
     spawn_stream_process(cmd, cfg.fps, tx, stop, frames, label, &format!("gst[{encoder}]"))
+}
+
+/// TV/tarayıcı dostu kodlama boyutu. Kesirli Wayland ölçeği (1536x864 vb.)
+/// standart 720p/1080p/2K/4K dışındaysa 1920x1080'e çekilir.
+fn encode_target(w: u32, h: u32, lite: bool) -> (u32, u32) {
+    if lite {
+        return (1920, 1080);
+    }
+    match (w, h) {
+        (1920, 1080) | (2560, 1440) | (3840, 2160) | (1280, 720) => (w, h),
+        _ => (1920, 1080),
+    }
+}
+
+fn source_raw_size(src: &Source, cfg: &PipelineConfig) -> (u32, u32) {
+    match src {
+        Source::PipeWire { size: Some((w, h)), .. } => (*w, *h),
+        Source::X11 { rect: Some(r), .. } => (r.width() as u32, r.height() as u32),
+        _ => cfg.capture_size.unwrap_or((1920, 1080)),
+    }
 }

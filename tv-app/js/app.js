@@ -77,6 +77,31 @@ function fallbackToRtp(err) {
   }
 }
 
+/* RTP modunda track'i <video> elementine bağla.
+   TUZAK (ölçüldü, Linux aynı-PC izleyici): host yerel izleyiciye ses track'i
+   eklemez → answer'da audio m-line port=9 + ayrı/boş stream. Eski kod her
+   ontrack'te `video.srcObject = ev.streams[0]` yapıyordu; muted audio olayı
+   video stream'ini ezip elemente yalnız audio bırakıyordu (framesDecoded > 0
+   ama videoWidth=0 / siyah ekran). Muted audio'yu yoksay; track'leri birleştir. */
+function bindRtpTrack(track) {
+  if (!track) return;
+  if (track.kind === 'audio' && track.muted) return;
+  let stream = (video.srcObject instanceof MediaStream)
+    ? video.srcObject
+    : new MediaStream();
+  if (!stream.getTracks().some((t) => t.id === track.id)) {
+    try {
+      stream.addTrack(track);
+    } catch (e) {
+      stream = new MediaStream(stream.getTracks().concat([track]));
+    }
+  }
+  video.srcObject = stream;
+  tryPlay();
+  setStatus('');
+  startStats();
+}
+
 /* Çözücü hatasında sayfayı YENİLEME (ekran kararıyordu): çözücüyü yerinde
    sıfırla, sonraki anahtar kareyle devam et. Üst üste 5 hata olursa RTP'ye dön. */
 let wcResets = 0;
@@ -408,7 +433,6 @@ async function connect() {
     }
     console.log('[app] video yolu:', TRANSPORT);
 
-    const media = new MediaStream(); // yalnız yedek yol için
     pc.ontrack = (ev) => {
       // Gecikme ipuçları: oynatma tamponunu sıfıra çek (destekleyen motorlarda).
       try { ev.receiver.playoutDelayHint = 0; } catch (e) {}
@@ -424,21 +448,26 @@ async function connect() {
         startStats();
         return;
       }
-      // ÖNEMLİ: tarayıcının kendi yönettiği akışı kullan (ev.streams[0]).
-      // Elle kurulan MediaStream'e oynatma başladıktan SONRA eklenen ses kanalı
-      // bazı motorlarda hiç seslendirilmiyordu (ilk açılışta ses yok bug'ı).
-      let stream;
-      if (ev.streams && ev.streams[0]) {
-        stream = ev.streams[0];
-      } else {
-        media.addTrack(ev.track);
-        stream = media;
-      }
-      if (video.srcObject !== stream) video.srcObject = stream;
-      tryPlay();
-      setStatus('');
-      startStats();
+      bindRtpTrack(ev.track);
     };
+
+    // Güvenlik ağı: bazı motorlarda video ontrack kaçıyor veya muted audio
+    // önce gelip stream'i bozuyor (Linux aynı-PC: framesDecoded>0, videoWidth=0).
+    // Bağlantı kurulunca receiver'lardan video'yu zorla bağla.
+    const ensureRtpVideo = () => {
+      if (USE_WEBCODECS || !pc) return;
+      const vt = pc.getReceivers().map((r) => r.track).find((t) => t && t.kind === 'video');
+      if (!vt) return;
+      const cur = video.srcObject;
+      const has = cur instanceof MediaStream && cur.getVideoTracks().some((t) => t.id === vt.id);
+      if (!has) bindRtpTrack(vt);
+    };
+    pc.addEventListener('connectionstatechange', () => {
+      if (pc.connectionState === 'connected') ensureRtpVideo();
+    });
+    // ontrack sırası garanti değil — kısa gecikmeyle bir kez daha bak.
+    setTimeout(ensureRtpVideo, 500);
+    setTimeout(ensureRtpVideo, 2000);
 
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState;

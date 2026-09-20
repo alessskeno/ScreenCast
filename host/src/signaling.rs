@@ -6,8 +6,9 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use axum::extract::{State, WebSocketUpgrade};
@@ -100,6 +101,7 @@ pub async fn serve(
     bind: SocketAddr,
     web_root: PathBuf,
     managed: bool,
+    encoder_dead: Arc<AtomicBool>,
 ) -> Result<()> {
     let app = if web_root.exists() {
         Router::new()
@@ -135,6 +137,17 @@ pub async fn serve(
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(async move {
+        // Turuncu Shell "paylaşımı durdur" / PipeWire kesilince kodlayıcı ölür →
+        // --managed süreç de çıksın ki QS eklentisi aktif kalmasın.
+        let encoder_gone = async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                if encoder_dead.load(Ordering::Relaxed) {
+                    tracing::warn!("Kodlayıcı/oturum bitti; kapanıyor");
+                    break;
+                }
+            }
+        };
         if managed {
             // GUI panelince yönetim: stdin kapanınca (panel "Durdur" dedi) ya da
             // Ctrl+C ile düzgün kapan — ses aygıtı/monitör geri alma çalışsın.
@@ -148,11 +161,13 @@ pub async fn serve(
                 _ = tokio::signal::ctrl_c() => {},
                 _ = terminate_signal() => {},
                 _ = stdin_eof => {},
+                _ = encoder_gone => {},
             }
         } else {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {},
                 _ = terminate_signal() => {},
+                _ = encoder_gone => {},
             }
         }
         tracing::info!("Kapatılıyor…");

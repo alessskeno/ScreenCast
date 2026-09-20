@@ -179,7 +179,15 @@ pub fn start(cfg: PipelineConfig, ffmpeg: PathBuf) -> Result<PipelineHandles> {
             }
         }
 
-        return Ok(PipelineHandles { encoded_tx, lite_tx, keyframe_request, stop, width, height });
+        return Ok(PipelineHandles {
+            encoded_tx,
+            lite_tx,
+            keyframe_request,
+            stop,
+            encoder_dead: attempt.dead.clone(),
+            width,
+            height,
+        });
     }
     anyhow::bail!("Hiçbir H.264 kodlayıcı çalışmadı (ffmpeg: {})", ffmpeg.display())
 }

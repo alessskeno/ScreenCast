@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.pc-mirror"
+          path="/org/gnome/shell/extensions/pc-mirror/">
+    <key name="binary-path" type="s">
+      <default>''</default>
+      <summary>mirror-host binary path</summary>
+      <description>Absolute path to mirror-host. Empty = search PATH, then ~/Development/ScreenCast/target/release/mirror-host.</description>
+    </key>
+    <key name="extend" type="b">
+      <default>true</default>
+      <summary>Extend mode</summary>
+      <description>If true, create a virtual second display; if false, mirror an existing monitor.</description>
+    </key>
+    <key name="mode" type="s">
+      <default>'1920x1080@60'</default>
+      <summary>Virtual display mode</summary>
+      <description>Used with extend: e.g. 1920x1080@60, 2560x1440@60, 3840x2160@60. Empty = driver default.</description>
+    </key>
+    <key name="bitrate" type="i">
+      <default>12</default>
+      <summary>Bitrate Mb/s</summary>
+      <range min="4" max="60"/>
+    </key>
+    <key name="fps" type="i">
+      <default>60</default>
+      <summary>Frame rate</summary>
+      <range min="15" max="120"/>
+    </key>
+    <key name="output" type="i">
+      <default>0</default>
+      <summary>Monitor index</summary>
+      <description>Which monitor to mirror (ignored in extend mode).</description>
+      <range min="0" max="15"/>
+    </key>
+    <key name="port" type="i">
+      <default>47000</default>
+      <summary>HTTP/signaling port</summary>
+      <range min="1024" max="65535"/>
+    </key>
+    <key name="audio" type="b">
+      <default>true</default>
+      <summary>Capture system audio</summary>
+    </key>
+    <key name="tv-audio" type="b">
+      <default>true</default>
+      <summary>TV-only audio</summary>
+      <description>Route default output to a virtual sink so PC speakers are silent.</description>
+    </key>
+  </schema>
+</schemalist>

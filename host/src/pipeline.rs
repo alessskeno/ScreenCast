@@ -225,5 +225,13 @@ pub fn start(cfg: PipelineConfig) -> Result<PipelineHandles> {
         })?;
     }
 
-    Ok(PipelineHandles { encoded_tx, lite_tx: None, keyframe_request, stop, width: ew, height: eh })
+    Ok(PipelineHandles {
+        encoded_tx,
+        lite_tx: None,
+        keyframe_request,
+        stop,
+        encoder_dead: Arc::new(AtomicBool::new(false)),
+        width: ew,
+        height: eh,
+    })
 }

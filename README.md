@@ -73,6 +73,10 @@ cargo build --release
 ./target/release/mirror-host --extend --mode 1920x1080@60   # gerçek 2. ekran
 ./target/release/mirror-host --tv-audio               # ses yalnız TV'den
 ./target/release/mirror-host --restore-audio          # takılı ses ayarını düzelt
+
+# GNOME Quick Settings (GNOME Shell 47+)
+bash gnome-extension/install.sh
+# Wayland: oturumu yenile; sonra sistem menüsünde "PC Mirror"
 ```
 
 Sonra aynı ağdaki tarayıcıdan / TV'den `http://<PC-IP>:47000/` açın.
@@ -80,6 +84,9 @@ Sonra aynı ağdaki tarayıcıdan / TV'den `http://<PC-IP>:47000/` açın.
 
 **Linux notları**
 
+- **GNOME Quick Settings:** `bash gnome-extension/install.sh` — egui ile aynı
+  `--managed` alt süreç modeli; ayarlar chevron menüde (aynala/genişlet, çözünürlük,
+  bitrate, fps, monitör, ses). egui paneli KDE/diğer DE'ler için kalır.
 - **Oturum tipi önemli:** `--extend` ve Wayland yakalaması GNOME/Mutter'a bağlıdır.
   X11 oturumunda aynalama `ximagesrc` ile çalışır ama `--extend` çalışmaz;
   KDE/wlroots Wayland oturumları henüz desteklenmiyor (bkz. Bilinen sınırlar).
@@ -167,6 +174,7 @@ host/                     Rust yayın ucu
   src/gst_engine.rs       GStreamer boru hattı (pipewiresrc/ximagesrc → H.264)
   src/cursor_linux.rs     imleç videoya gömülü (Wayland kısıtı) — kanal sessiz
   src/audio_route_linux.rs  pactl module-null-sink ile varsayılan çıkışı çevirme
+gnome-extension/          GNOME Quick Settings eklentisi (pc-mirror@ales)
 scripts/                  setup-arch.sh / setup-ubuntu.sh (bağımlılık kurulumu)
 tv-app/                   Tizen web uygulaması (tarayıcıda da çalışır)
   index.html / css / js   <video>/<canvas> + WebRTC istemcisi + imleç + istatistik

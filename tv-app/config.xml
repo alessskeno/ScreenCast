@@ -1,6 +1,6 @@
 ﻿<?xml version="1.0" encoding="UTF-8"?>
 <widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
-        id="http://example.org/pcmirror" version="0.3.5" viewmodes="fullscreen">
+        id="http://example.org/pcmirror" version="0.3.6" viewmodes="fullscreen">
     <tizen:application id="AzMirr0001.PCMirror" package="AzMirr0001" required_version="2.3"/>
     <name>PC Mirror</name>
     <feature name="http://tizen.org/feature/screen.size.all"/>

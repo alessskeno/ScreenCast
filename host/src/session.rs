@@ -72,23 +72,30 @@ async fn drive(mut ws: WebSocket, state: AppState, peer: std::net::SocketAddr) -
     }
 
     // Yalnızca H.264 sun: TV'nin donanım çözücüsü bu; VP8/VP9 pazarlığına girme.
+    // Hem High hem Baseline profillerini kaydet ki TV/tarayıcı donanımına göre
+    // doğru çözücü başlatılsın (High@L5.2: 4K60, High@L4.2: 1080p60, Baseline: eski cihazlar).
     let mut media = MediaEngine::default();
-    media.register_codec(
-        RTCRtpCodecParameters {
-            capability: RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_H264.to_owned(),
-                clock_rate: 90000,
-                channels: 0,
-                sdp_fmtp_line:
-                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
-                        .to_owned(),
-                rtcp_feedback: vec![],
+    for (fmtp, pt) in [
+        ("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640034", 102),
+        ("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=64002a", 104),
+        ("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=4d002a", 106),
+        ("level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f", 108),
+    ] {
+        media.register_codec(
+            RTCRtpCodecParameters {
+                capability: RTCRtpCodecCapability {
+                    mime_type: MIME_TYPE_H264.to_owned(),
+                    clock_rate: 90000,
+                    channels: 0,
+                    sdp_fmtp_line: fmtp.to_owned(),
+                    rtcp_feedback: vec![],
+                },
+                payload_type: pt,
+                ..Default::default()
             },
-            payload_type: 102,
-            ..Default::default()
-        },
-        RTPCodecType::Video,
-    )?;
+            RTPCodecType::Video,
+        )?;
+    }
     // Ses: Opus 48 kHz stereo (WebRTC'nin standart ses kodeği).
     media.register_codec(
         RTCRtpCodecParameters {

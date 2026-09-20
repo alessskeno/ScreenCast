@@ -36,8 +36,12 @@ cargo build --release
 ./target/release/mirror-host --extend --mode 1920x1080@60    # GERÇEK 2. ekran
 ./target/release/mirror-host --tv-audio                      # ses yalnız TV'den
 ./target/release/mirror-host --restore-audio                 # takılan sesi düzelt
+./target/release/mirror-host --list-monitors                 # JSON monitör listesi (QS)
+bash gnome-extension/install.sh                              # GNOME Quick Settings
 ```
 
+- GNOME QS (`pc-mirror@ales`): Quick Settings'ten başlat/durdur + mirror/extend/bitrate/…
+  Wayland'da kurulumdan sonra oturumu yenile. egui paneli (`--gui`) KDE vb. için kalır.
 - Platform ayrımı `main.rs`'te `#[cfg]` + `#[path]` ile: `cursor` → cursor_win.rs /
   cursor_linux.rs, `audio_route` → audio_route_win.rs / audio_route_linux.rs.
 - Cargo.toml'da `windows`/`windows-core`/`cpal` artık **yalnız** `cfg(windows)`
@@ -157,6 +161,8 @@ host/src/screencast.rs   (Linux) Mutter ScreenCast D-Bus: RecordMonitor (aynalam
 host/src/gst_engine.rs   (Linux) gst-launch alt süreci: pipewiresrc/ximagesrc → H.264
 host/src/cursor_linux.rs (Linux) imleç videoya gömülü → kanal sessiz kalır
 host/src/audio_route_linux.rs (Linux) pactl module-null-sink ile varsayılan çıkışı çevirme
+gnome-extension/pc-mirror@ales/  GNOME Quick Settings: Başlat/Durdur + ayar menüsü (gp-toggle kalıbı)
+gnome-extension/install.sh       Eklentiyi ~/.local/share/.../extensions altına kurar
 scripts/setup-arch.sh    Arch/CachyOS bağımlılık kurulumu + doğrulama
 scripts/setup-ubuntu.sh  Ubuntu/Debian bağımlılık kurulumu + doğrulama
 tv-app/index.html        TV/tarayıcı istemcisi iskeleti (video + imleç svg + kurulum paneli)
@@ -359,6 +365,34 @@ gerçek exe hâlâ Windows'ta derlenmeli.
   için boru kırılmasıyla ölüyor) — sorun görülürse buraya bakılsın.
 - Teşhis ipucu: panel logunda hareketsiz ekranda "kodlama 1 fps" görüyorsan
   anahtar kare aralığı patlamıştır; "60 fps" görüyorsan bu hata yok.
+- **RTP siyah ekran (aynı-PC izleyici, 2026-09-20 ölçüldü):** host yerel
+  izleyiciye ses track'i eklemez → answer'da audio m-line `port=9` + ayrı stream.
+  İstemci eski kodda her `ontrack`'te `video.srcObject = ev.streams[0]` yapıyordu;
+  muted audio olayı video stream'ini ezip elemente yalnız audio bırakıyordu.
+  Belirti: `framesDecoded` artıyor ama `videoWidth=0` / siyah ekran. WebCodecs
+  yolu etkilenmez (canvas). ÇÖZÜM: `bindRtpTrack` + muted audio yoksay +
+  bağlantı sonrası `ensureRtpVideo` güvenlik ağı (`tv-app/js/app.js`).
+- **GNOME QS eklentisi boş ekran (2026-09-20):** `enable()` içinde
+  `GLib.spawn_sync(mirror-host --list-monitors)` Shell ana döngüsünü oturum
+  açılışında kilitledi (Mutter henüz hazır değilken D-Bus bekleyişi). Belirti:
+  login sonrası hiç UI yok. ÇÖZÜM: enable'da senkron spawn YOK; monitör listesi
+  menü açılınca `Gio.Subprocess` asenkron. TTY'den kurtarma:
+  `mv ~/.local/share/gnome-shell/extensions ~/.local/share/gnome-shell/extensions.bak`
+- **GNOME QS menü scroll yok (2026-09-20):** `QuickToggleMenu` ScrollView +
+  max-height **güvenilmez** (`open()` preferred-height eziyor; tekerlek ölür).
+  ÇÖZÜM: Scroll yok — **sayfa menüsü** (`_showMainPage` / `_showModePage`…),
+  `hide_on_activate=false`, `← Geri`. Ayar yazımı `_commit()` → yayın açıksa
+  `_restartStream` (GSettings `changed` sinyaline güvenilmez). Turuncu Shell
+  göstergesi: host `encoder_dead` olunca `--managed` kapanır. Not: yalnız QS
+  kapat-aç eklenti kodunu YENİLEMEZ → `gnome-extensions disable/enable` veya
+  oturum kapat-aç.
+- **Linux kesirli ölçek → TV 2x2/siyah (2026-09-20):** Wayland %125 ölçekte
+  Mutter 1536x864 verir; bazı TV H.264 çözücüleri bunu 2x2/siyah gösterir.
+  ÇÖZÜM: `gst_engine` standart dışı boyutu `videoscale` ile 1920x1080'e çeker.
+  Extend'de boyut zaten 1920x1080 olsa da **her zaman videoscale** (dma-buf/
+  modifier temiz kopya) — aynalama scale ile düzelip extend'in 2x2 kalması
+  bunu düşündürdü. Ayrıca `encoder_dead` sonrası Drop takılırsa 2 sn sonra
+  `process::exit(0)`.
 
 **Kurulum betikleri (scripts/, 2026-08-31 — yaşandı):**
 - **Arch'ta `pacman -S --needed <paket>` ile bağımlılık kurma!** Paket kuruluysa

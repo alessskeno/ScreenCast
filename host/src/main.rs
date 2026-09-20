@@ -132,6 +132,10 @@ struct Args {
     /// (dahili) GUI panelince yönetiliyor: stdin kapanınca düzgün kapan
     #[arg(long, hide = true)]
     managed: bool,
+
+    /// Monitörleri JSON olarak yazıp çık (GNOME QS / betikler için)
+    #[arg(long)]
+    list_monitors: bool,
 }
 
 fn parse_mode(s: &str) -> Result<(u32, u32, u32)> {
@@ -147,6 +151,10 @@ fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().collect();
     if argv.len() <= 1 || argv.iter().any(|a| a == "--gui") {
         return gui::run();
+    }
+    // Monitör listesi bloklu D-Bus kullanır; tokio runtime içinde panikler.
+    if argv.iter().any(|a| a == "--list-monitors") {
+        return list_monitors_cli();
     }
     cli_main()
 }
@@ -217,12 +225,77 @@ async fn cli_main() -> Result<()> {
         audio_tx,
     };
 
-    let result = signaling::serve(state, args.bind, args.web_root, args.managed).await;
+    let result = signaling::serve(
+        state,
+        args.bind,
+        args.web_root,
+        args.managed,
+        pipeline.encoder_dead.clone(),
+    )
+    .await;
     pipeline.stop.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(route) = audio_route {
         route.restore();
     }
+    // Linux: Mutter ScreenCast Drop bazen D-Bus'ta takılır → süreç hayalet kalır,
+    // 47000 dinlenmez, TV siyah ekran (yaşandı). Temizlik için kısa süre tanı,
+    // sonra zorla çık.
+    #[cfg(target_os = "linux")]
+    {
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            std::process::exit(0);
+        });
+    }
     result
+}
+
+/// `--list-monitors`: monitörleri stdout'a JSON dizi olarak yazar, çıkar.
+fn list_monitors_cli() -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct Row {
+        index: u32,
+        connector: String,
+        width: u32,
+        height: u32,
+        primary: bool,
+    }
+
+    #[cfg(target_os = "linux")]
+    let rows: Vec<Row> = screencast::list_monitors_blocking()?
+        .into_iter()
+        .enumerate()
+        .map(|(i, m)| Row {
+            index: i as u32,
+            width: m.width(),
+            height: m.height(),
+            primary: m.primary,
+            connector: m.connector,
+        })
+        .collect();
+
+    #[cfg(windows)]
+    let rows: Vec<Row> = vdd::all_outputs()
+        .into_iter()
+        .filter(|o| o.adapter_index == 0)
+        .map(|o| {
+            let w = o.rect.width().max(1) as u32;
+            let h = o.rect.height().max(1) as u32;
+            Row {
+                index: o.output_index,
+                connector: format!("Monitor {}", o.output_index + 1),
+                width: w,
+                height: h,
+                primary: o.rect.left == 0 && o.rect.top == 0,
+            }
+        })
+        .collect();
+
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let rows: Vec<Row> = Vec::new();
+
+    println!("{}", serde_json::to_string_pretty(&rows)?);
+    Ok(())
 }
 
 /// Yakalama kurulumunun sonucu.

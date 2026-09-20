@@ -1,0 +1,7 @@
+{
+  "uuid": "pc-mirror@ales",
+  "name": "PC Mirror",
+  "description": "Start and stop PC Mirror screen casting from Quick Settings (mirror or extend to TV/browser).",
+  "shell-version": ["47", "48", "49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.pc-mirror"
+}
